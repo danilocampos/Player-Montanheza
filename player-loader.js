@@ -58,6 +58,8 @@
 #rmtz-player .rmtz-vol-pct{font-size:10px;color:rgba(255,255,255,.35);width:28px;text-align:right}
 #rmtz-player .rmtz-status{font-size:10px;color:rgba(255,255,255,.3);text-align:center;letter-spacing:.3px;min-height:14px}
 #rmtz-btn-mute{background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center}
+#rmtz-player.rmtz-blocked #rmtz-pill{animation:rmtz-nudge 1.4s ease-in-out infinite}
+@keyframes rmtz-nudge{0%,100%{box-shadow:0 8px 32px rgba(0,0,0,.5)}50%{box-shadow:0 0 0 4px rgba(45,166,74,.5),0 8px 32px rgba(0,0,0,.5)}}
 `;
 
   var style = document.createElement('style');
@@ -219,12 +221,66 @@
     btnClose.addEventListener('click', function (e) { e.stopPropagation(); card.classList.remove('rmtz-open'); });
     document.addEventListener('click', function (e) { if (!player.contains(e.target)) card.classList.remove('rmtz-open'); });
 
-    /* pré-carrega HLS.js */
-    if (!window.Hls) {
+    /* ── Autoplay ── */
+    function startAutoplay() {
+      setLoading(true);
+      initHLS();
+    }
+
+    /* Se o browser bloquear o autoplay, pill pisca pedindo interação */
+    function onAutoplayBlocked() {
+      setLoading(false);
+      player.classList.add('rmtz-blocked');
+      setStatus('Toque para ouvir');
+      var once = function () {
+        player.classList.remove('rmtz-blocked');
+        document.removeEventListener('click', once);
+        setLoading(true);
+        initHLS();
+      };
+      document.addEventListener('click', once);
+    }
+
+    /* Sobrescreve initHLS para capturar rejeição de autoplay */
+    var _initHLS = initHLS;
+    initHLS = function () {
+      if (window.Hls && Hls.isSupported()) {
+        if (hls) hls.destroy();
+        hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hls.loadSource(STREAM);
+        hls.attachMedia(audio);
+        hls.on(Hls.Events.MANIFEST_PARSED, function () {
+          var p = audio.play();
+          if (p && typeof p.catch === 'function') {
+            p.catch(function () { onAutoplayBlocked(); });
+          }
+        });
+        hls.on(Hls.Events.ERROR, function (_, data) {
+          if (data.fatal) {
+            setStatus('Reconectando…');
+            setTimeout(function () { if (isPlaying) initHLS(); }, 3000);
+          }
+        });
+      } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
+        audio.src = STREAM;
+        var p = audio.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(function () { onAutoplayBlocked(); });
+        }
+      } else {
+        setStatus('Navegador não suportado');
+      }
+    };
+
+    /* Carrega HLS.js e dispara autoplay */
+    function loadAndPlay() {
+      if (window.Hls) { startAutoplay(); return; }
       var s = document.createElement('script');
       s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1';
+      s.onload = startAutoplay;
       document.head.appendChild(s);
     }
+    loadAndPlay();
   }
 
   if (document.readyState === 'loading') {
